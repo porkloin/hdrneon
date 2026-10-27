@@ -1,0 +1,17 @@
+[package]
+name = "hdrneon"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "A small HDR test scene: neon tubes on a dark wall above reference patches, in SDR, HDR10 or scRGB"
+repository = "https://github.com/porkloin/hdrneon"
+keywords = ["hdr", "vulkan", "benchmark", "test-pattern"]
+categories = ["graphics", "development-tools::testing"]
+
+[dependencies]
+ash = "0.38"
+ash-window = "0.13"
+winit = "0.30"
+
+[profile.release]
+strip = true
