@@ -55,6 +55,7 @@ pub struct Options {
 	pub load: u32,
 	pub vsync: bool,
 	pub list_formats: bool,
+	pub log: Option<String>,
 }
 
 const USAGE: &str = "\
@@ -69,6 +70,7 @@ usage: hdrneon [options]
   --load N                extra shader work per pixel (default 0)
   --no-vsync              present as fast as possible (mailbox or immediate)
   --list-formats          print the surface formats and exit
+  --log PATH              append the mode presented, and each switch, as JSON lines to PATH
 
 keys: m or space switches mode, q or escape quits. frame times are printed on exit.";
 
@@ -83,6 +85,7 @@ fn parse_args() -> Result<Options, String> {
 		load: 0,
 		vsync: true,
 		list_formats: false,
+		log: None,
 	};
 	let mut args = std::env::args().skip(1);
 	let secs = |v: Option<String>, flag: &str| -> Result<Duration, String> {
@@ -101,6 +104,7 @@ fn parse_args() -> Result<Options, String> {
 					.ok_or_else(|| format!("unknown mode {v:?}"))?;
 			},
 			"--cycle" => o.cycle = Some(secs(args.next(), "--cycle")?),
+			"--log" => o.log = Some(args.next().ok_or("--log needs a path")?),
 			"--duration" => o.duration = Some(secs(args.next(), "--duration")?),
 			"--fullscreen" => o.fullscreen = true,
 			"--size" => {
@@ -143,9 +147,33 @@ struct App {
 	last_frame: Option<Instant>,
 	frame_times: Vec<f32>,
 	error: Option<String>,
+	/// --log, appended to so a reader following it keeps its place when hdrneon starts again.
+	log: Option<std::fs::File>,
+}
+
+/// Microseconds since the Unix epoch.
+fn unix_us() -> u128 {
+	std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map_or(0, |d| d.as_micros())
 }
 
 impl App {
+	/// One line of --log, written whole and flushed: the mode now presented, and whether it's a switch.
+	fn log_mode(&mut self, mode: Mode, switch: bool) {
+		use std::io::Write;
+		if let Some(log) = &mut self.log
+			&& let Err(e) = writeln!(
+				log,
+				r#"{{"event":"mode","mode":"{}","switch":{switch},"unix_us":{}}}"#,
+				mode.name(),
+				unix_us()
+			) {
+			eprintln!("hdrneon: writing the log failed: {e}");
+			self.log = None;
+		}
+	}
+
 	fn fail(&mut self, event_loop: &ActiveEventLoop, error: String) {
 		self.error = Some(error);
 		event_loop.exit();
@@ -156,15 +184,20 @@ impl App {
 	fn next_mode(&mut self) {
 		let Some(gpu) = &mut self.gpu else { return };
 		let mut mode = gpu.mode();
+		let mut switched = None;
 		for _ in 1..Mode::ALL.len() {
 			mode = mode.next();
 			match gpu.set_mode(mode) {
 				Ok(()) => {
 					eprintln!("hdrneon: {}", mode.name());
+					switched = Some(mode);
 					break;
 				},
 				Err(e) => eprintln!("hdrneon: {e}"),
 			}
+		}
+		if let Some(mode) = switched {
+			self.log_mode(mode, true);
 		}
 		self.mode_since = Instant::now();
 	}
@@ -229,7 +262,9 @@ impl ApplicationHandler for App {
 			},
 			Ok(gpu) => {
 				eprintln!("hdrneon: {} on {}", gpu.mode().name(), gpu.device_name());
+				let mode = gpu.mode();
 				self.gpu = Some(gpu);
+				self.log_mode(mode, false);
 				self.start = Instant::now();
 				self.mode_since = self.start;
 			},
@@ -293,7 +328,17 @@ fn main() -> ExitCode {
 		last_frame: None,
 		frame_times: Vec::new(),
 		error: None,
+		log: None,
 	};
+	if let Some(path) = &app.options.log {
+		match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+			Ok(f) => app.log = Some(f),
+			Err(e) => {
+				eprintln!("hdrneon: {path}: {e}");
+				return ExitCode::FAILURE;
+			},
+		}
+	}
 	if let Err(e) = event_loop.run_app(&mut app) {
 		eprintln!("hdrneon: {e}");
 		return ExitCode::FAILURE;

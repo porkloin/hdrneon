@@ -7,6 +7,7 @@ Like glxgears, but for HDR.
     hdrneon                          # hdr10
     hdrneon --mode scrgb
     hdrneon --mode sdr --cycle 5     # sdr -> hdr10 -> scrgb every 5s
+    hdrneon --cycle 2 --log m.jsonl  # each switch as a JSON line, timed
 
 `hdrneon --help` for the rest. M or space switches mode, Q quits.
 
